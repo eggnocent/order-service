@@ -40,7 +40,7 @@ func (p *PaymentKafka) HandlePayment(ctx context.Context, msg *sarama.ConsumerMe
 	data := body.Body.Data
 	err = p.service.GetOrder().HandlePayment(ctx, &data)
 	if err != nil {
-		logrus.Error("[PaymentKafka-HandlePayment] error when handle payment: ", err)
+		logrus.Error("[PaymentKafka-HandlePayments] error when handle payment: ", err)
 		return err
 	}
 
