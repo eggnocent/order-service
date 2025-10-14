@@ -11,7 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-const PaymentTopic = "paymet-service-callback"
+const PaymentTopic = "payment-service-callback"
 
 type PaymentKafka struct {
 	service services.IServiceRegistry
