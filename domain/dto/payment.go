@@ -12,7 +12,7 @@ type PaymentRequest struct {
 	Amount         float64        `json:"amount"`
 	Description    string         `json:"description"`
 	CustomerDetail CustomerDetail `json:"customerDetail"`
-	ItemsDetails   []ItemDetails  `json:"itemsDetails"`
+	ItemDetails    []ItemDetails  `json:"itemDetails"`
 }
 
 type CustomerDetail struct {

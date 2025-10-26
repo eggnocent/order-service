@@ -14,6 +14,6 @@ type UserData struct {
 	Name        string    `json:"name"`
 	Email       string    `json:"email"`
 	Role        string    `json:"role"`
-	PhoneNumber string    `json:"phone_number"`
+	PhoneNumber string    `json:"phoneNumber"`
 	Username    string    `json:"username"`
 }

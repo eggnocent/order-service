@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"order-service/clients"
 	clientField "order-service/clients/field"
 	clientPayment "order-service/clients/payment"
@@ -13,6 +14,7 @@ import (
 	"order-service/domain/dto"
 	"order-service/domain/models"
 	"order-service/repositories"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -144,25 +146,54 @@ func (o *OrderService) Create(ctx context.Context, param *dto.OrderRequest) (*dt
 		txErr, err          error
 		user                = ctx.Value(constants.User).(*clientUser.UserData)
 		field               *clientField.FieldData
-		paymentResponse     *clientPayment.PaymentData // Fix: Ganti PaymentResponse ke PaymentData
+		paymentResponse     *clientPayment.PaymentData
 		orderFieldSchedules = make([]models.OrderField, 0, len(param.FieldScheduleIDs))
 		totalAmount         float64
 	)
 
+	log.Printf("🟢 Create order request: %+v\n", param)
+	log.Printf("👤 User from context: %+v\n", user)
+
 	for _, fieldID := range param.FieldScheduleIDs {
+		log.Printf("🔎 Fetching field data for UUID: %s\n", fieldID)
 		uuidParsed := uuid.MustParse(fieldID)
+
 		field, err = o.client.GetField().GetFieldByUUID(ctx, uuidParsed)
 		if err != nil {
+			log.Printf("❌ Error fetching field %s: %v\n", fieldID, err)
 			return nil, err
 		}
 
-		totalAmount += field.PricePerHour
+		if field.PricePerHour <= 0 {
+			log.Printf("❌ Field %s has invalid price: %.2f", field.UUID, field.PricePerHour)
+			return nil, fmt.Errorf("invalid price for field: %s", field.UUID)
+		}
+
+		if strings.TrimSpace(field.FieldName) == "" {
+			log.Printf("❌ Field name is empty for field %s\n", field.UUID)
+			return nil, fmt.Errorf("field name cannot be empty for field %s", field.UUID)
+		}
+
+		log.Printf("✅ Field data: %+v\n", field)
+
 		if field.Status == constants.BookedStatus.String() {
+			log.Printf("🚫 Field %s already booked\n", fieldID)
 			return nil, errOrder.ErrFieldAlreadyBooked
 		}
+
+		totalAmount += field.PricePerHour
+	}
+
+	log.Printf("💰 Total order amount: %.2f\n", totalAmount)
+
+	if strings.TrimSpace(user.PhoneNumber) == "" {
+		log.Printf("❌ Phone number is empty for user: %s\n", user.UUID)
+		return nil, fmt.Errorf("user phone number is required")
 	}
 
 	err = o.repository.GetTx().Transaction(func(tx *gorm.DB) error {
+		log.Println("🚧 Starting DB transaction")
+
 		order, txErr = o.repository.GetOrder().Create(ctx, tx, &models.Order{
 			UserID: user.UUID,
 			Amount: totalAmount,
@@ -171,8 +202,10 @@ func (o *OrderService) Create(ctx context.Context, param *dto.OrderRequest) (*dt
 			IsPaid: false,
 		})
 		if txErr != nil {
+			log.Printf("❌ Failed to create order: %v\n", txErr)
 			return txErr
 		}
+		log.Printf("✅ Created order: %+v\n", order)
 
 		for _, fieldID := range param.FieldScheduleIDs {
 			uuidParsed := uuid.MustParse(fieldID)
@@ -182,24 +215,30 @@ func (o *OrderService) Create(ctx context.Context, param *dto.OrderRequest) (*dt
 			})
 		}
 
+		log.Printf("📌 Creating order-field schedule relation: %+v\n", orderFieldSchedules)
 		txErr = o.repository.GetOrderField().Create(ctx, tx, orderFieldSchedules)
 		if txErr != nil {
+			log.Printf("❌ Failed to create order-field schedule: %v\n", txErr)
 			return txErr
 		}
 
+		log.Println("📌 Creating order history")
 		txErr = o.repository.GetOrderHistory().Create(ctx, tx, &dto.OrderHistoryRequest{
 			Status:  constants.Pending.GetStatusString(),
 			OrderID: order.ID,
 		})
 		if txErr != nil {
+			log.Printf("❌ Failed to create order history: %v\n", txErr)
 			return txErr
 		}
 
-		expiredAt := time.Now().Add(1 * time.Hour) // set expired untuk paymentlink 1 jam dari ketika create order
+		expiredAt := time.Now().Add(1 * time.Hour)
 		description := fmt.Sprintf("Pembayaran sewa %s", field.FieldName)
-		paymentResponse, txErr = o.client.GetPayment().CreatePaymentLink(ctx, &dto.PaymentRequest{
+
+		// 🔍 Buat dan log payload payment
+		paymentRequest := &dto.PaymentRequest{
 			OrderID:     order.UUID,
-			ExpiredAt:   expiredAt,
+			ExpiredAt:   time.Unix(expiredAt.Unix(), 0),
 			Amount:      order.Amount,
 			Description: description,
 			CustomerDetail: dto.CustomerDetail{
@@ -207,7 +246,7 @@ func (o *OrderService) Create(ctx context.Context, param *dto.OrderRequest) (*dt
 				Email: user.Email,
 				Phone: user.PhoneNumber,
 			},
-			ItemsDetails: []dto.ItemDetails{
+			ItemDetails: []dto.ItemDetails{
 				{
 					ID:       uuid.New(),
 					Name:     description,
@@ -215,22 +254,43 @@ func (o *OrderService) Create(ctx context.Context, param *dto.OrderRequest) (*dt
 					Quantity: 1,
 				},
 			},
-		})
+		}
 
+		log.Printf("📤 Payment Request Payload:\nOrderID: %s\nExpiredAt: %s\nAmount: %.2f\nDescription: %q\nCustomer: %s / %s / %s\nItems: %+v\n",
+			paymentRequest.OrderID,
+			paymentRequest.ExpiredAt.Format(time.RFC3339),
+			paymentRequest.Amount,
+			paymentRequest.Description,
+			paymentRequest.CustomerDetail.Name,
+			paymentRequest.CustomerDetail.Email,
+			paymentRequest.CustomerDetail.Phone,
+			paymentRequest.ItemDetails,
+		)
+
+		// 🔗 Kirim request payment link
+		paymentResponse, txErr = o.client.GetPayment().CreatePaymentLink(ctx, paymentRequest)
 		if txErr != nil {
+			log.Printf("❌ Failed to create payment link: %v\n", txErr)
 			return txErr
 		}
 
+		log.Printf("✅ Payment link created: %+v\n", paymentResponse)
+
+		log.Println("🔄 Updating order with payment UUID")
 		txErr = o.repository.GetOrder().Update(ctx, tx, &models.Order{
 			PaymentID: paymentResponse.UUID,
 		}, order.UUID)
 		if txErr != nil {
+			log.Printf("❌ Failed to update order with payment ID: %v\n", txErr)
 			return txErr
 		}
+
+		log.Println("✅ Transaction committed successfully")
 		return nil
 	})
 
 	if err != nil {
+		log.Printf("❌ Error in Create order transaction: %v\n", err)
 		return nil, err
 	}
 
@@ -246,6 +306,7 @@ func (o *OrderService) Create(ctx context.Context, param *dto.OrderRequest) (*dt
 		UpdatedAt:   *order.UpdatedAt,
 	}
 
+	log.Printf("✅ Final Order Response: %+v\n", response)
 	return response, nil
 }
 

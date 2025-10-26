@@ -55,15 +55,10 @@ func (f *FieldClient) GetFieldByUUID(ctx context.Context, uuid uuid.UUID) (*Fiel
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("field response: %s", response.Message)
+		return nil, fmt.Errorf("user response: %s", response.Message)
 	}
 
-	// Fix: Karena Data adalah []FieldData, ambil elemen pertama
-	if len(response.Data) == 0 {
-		return nil, fmt.Errorf("no field data found")
-	}
-
-	return &response.Data[0], nil
+	return &response.Data, nil
 }
 
 func (f *FieldClient) UpdateStatus(request *dto.UpdateFieldScheduleStatusRequest) error {

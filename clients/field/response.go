@@ -7,16 +7,16 @@ import (
 )
 
 type FieldResponse struct {
-	Code    int         `json:"code"`
-	Status  string      `json:"status"`
-	Message string      `json:"message"`
-	Data    []FieldData `json:"data"`
+	Code    int       `json:"code"`
+	Status  string    `json:"status"`
+	Message string    `json:"message"`
+	Data    FieldData `json:"data"`
 }
 
 type FieldData struct {
 	UUID         uuid.UUID  `json:"uuid"`
-	FieldName    string     `json:"fieldName"`
-	PricePerHour float64    `json:"pricePerHour"`
+	FieldName    string     `json:"field_name"`
+	PricePerHour float64    `json:"price_per_hour"`
 	Date         string     `json:"date"`
 	StartTime    string     `json:"startTime"`
 	EndTime      string     `json:"endTime"`

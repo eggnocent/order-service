@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"order-service/clients/config"
 	"order-service/common/util"
@@ -73,50 +74,75 @@ func (p *PaymentClient) CreatePaymentLink(ctx context.Context, req *dto.PaymentR
 		p.client.SignatureKey(),
 		unixTime,
 	)
-
 	apiKey := util.GenerateSHA256(generateAPIKey)
 	token := ctx.Value(constants.Token).(string)
 	bearerToken := fmt.Sprintf("Bearer %s", token)
 
+	// Log payload sebelum marshal
+	log.Printf("📤 Outgoing Payment Request struct: %+v\n", req)
+
 	body, err := json.Marshal(req)
 	if err != nil {
+		log.Printf("❌ Error marshal payment request: %v\n", err)
 		return nil, err
 	}
+	log.Printf("📦 JSON Payload: %s\n", string(body))
 
+	// Execute request
 	resp, bodyResp, errs := p.client.Client().Clone().
 		Post(fmt.Sprintf("%s/api/v1/payments", p.client.BaseURL())).
 		Set(constants.Authorization, bearerToken).
 		Set(constants.XServiceName, configApp.Config.AppName).
 		Set(constants.XApiKey, apiKey).
 		Set(constants.XRequestAt, fmt.Sprintf("%d", unixTime)).
+		Set("Content-Type", "application/json"). // Important!
 		Send(string(body)).
 		End()
 
+	// Log error jika ada
 	if len(errs) > 0 {
+		log.Printf("❌ Resty Errors: %+v\n", errs)
 		return nil, errs[0]
 	}
 
-	var response PaymentResponse
-	if resp.StatusCode != http.StatusCreated {
-		err = json.Unmarshal([]byte(bodyResp), &response)
-		if err != nil {
-			return nil, err
-		}
+	// Log status dan response raw
+	log.Printf("📥 Status code from payment-service: %d\n", resp.StatusCode)
+	log.Printf("📥 Raw response body: %s\n", bodyResp)
 
+	var response PaymentResponse
+	err = json.Unmarshal([]byte(bodyResp), &response)
+	if err != nil {
+		log.Printf("❌ Failed to unmarshal payment response: %v\n", err)
+		return nil, err
+	}
+	log.Printf("📥 Parsed response: %+v\n", response)
+
+	if resp.StatusCode != http.StatusCreated {
 		paymentError := fmt.Errorf("payment response: %s", response.Message)
 		return nil, paymentError
 	}
 
-	err = json.Unmarshal([]byte(bodyResp), &response)
-	if err != nil {
-		return nil, err
-	}
-
-	// Fix: Gunakan type assertion seperti di GetPaymentByUUID
-	data, ok := response.Data.(PaymentData)
+	// Cek dan cast data
+	data, ok := response.Data.(map[string]interface{})
 	if !ok {
+		log.Printf("❌ Failed to cast response.Data to map[string]interface{}: %+v\n", response.Data)
 		return nil, fmt.Errorf("failed to cast response data to PaymentData")
 	}
 
-	return &data, nil
+	// Convert map[string]interface{} ke JSON → struct
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("❌ Failed to marshal payment response data: %v\n", err)
+		return nil, err
+	}
+
+	var paymentData PaymentData
+	err = json.Unmarshal(dataBytes, &paymentData)
+	if err != nil {
+		log.Printf("❌ Failed to unmarshal payment data into struct: %v\n", err)
+		return nil, err
+	}
+
+	log.Printf("✅ Final PaymentData parsed: %+v\n", paymentData)
+	return &paymentData, nil
 }

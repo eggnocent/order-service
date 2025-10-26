@@ -1,6 +1,9 @@
 package controllers
 
 import (
+	"bytes"
+	"io"
+	"log"
 	"net/http"
 	"order-service/common/response"
 	"order-service/domain/dto"
@@ -115,8 +118,22 @@ func (o *OrderController) Create(c *gin.Context) {
 		ctx     = c.Request.Context()
 	)
 
+	// Log request headers
+	for k, v := range c.Request.Header {
+		log.Printf("📥 Header [%s] = %v\n", k, v)
+	}
+
+	// Log request body secara mentah (gunakan io.ReadAll untuk debugging)
+	bodyBytes, _ := io.ReadAll(c.Request.Body)
+	log.Printf("📥 Raw Body: %s\n", string(bodyBytes))
+
+	// Reset Body agar bisa dibaca lagi oleh ShouldBindJSON
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	// Bind JSON
 	err := c.ShouldBindJSON(&request)
 	if err != nil {
+		log.Printf("❌ Gagal bind JSON: %v\n", err)
 		response.HttpResponse(response.ParamHTTPResp{
 			Code: http.StatusBadRequest,
 			Err:  err,
@@ -125,10 +142,15 @@ func (o *OrderController) Create(c *gin.Context) {
 		return
 	}
 
+	log.Printf("✅ Berhasil bind JSON: %+v\n", request)
+
+	// Validasi
 	validate := validator.New()
 	if err = validate.Struct(request); err != nil {
+		log.Printf("❌ Validasi gagal: %v\n", err)
 		errMessage := http.StatusText(http.StatusUnprocessableEntity)
 		errorResponse := error2.ErrValidationResponse(err)
+
 		response.HttpResponse(response.ParamHTTPResp{
 			Err:     err,
 			Code:    http.StatusUnprocessableEntity,
@@ -139,8 +161,10 @@ func (o *OrderController) Create(c *gin.Context) {
 		return
 	}
 
+	// Panggil service
 	result, err := o.service.GetOrder().Create(ctx, &request)
 	if err != nil {
+		log.Printf("❌ Gagal create order: %v\n", err)
 		response.HttpResponse(response.ParamHTTPResp{
 			Code: http.StatusBadRequest,
 			Err:  err,
@@ -148,6 +172,8 @@ func (o *OrderController) Create(c *gin.Context) {
 		})
 		return
 	}
+
+	log.Printf("✅ Order berhasil dibuat: %+v\n", result)
 
 	response.HttpResponse(response.ParamHTTPResp{
 		Code: http.StatusCreated,

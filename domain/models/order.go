@@ -16,7 +16,7 @@ type Order struct {
 	Amount    float64               `gorm:"type:decimal(10,2);not null"`
 	Status    constants.OrderStatus `gorm:"type:int;not null"`
 	Date      time.Time             `gorm:"type:timestamp;not null"`
-	IsPaid    bool                  `gorm:"type:boolean:not null default:false"`
+	IsPaid    bool                  `gorm:"not null;default:false"`
 	PaidAt    *time.Time            `gorm:"type:timestamp;"`
 	CreatedAt *time.Time            `gorm:"autoCreateTime"`
 	UpdatedAt *time.Time            `gorm:"autoUpdateTime"`

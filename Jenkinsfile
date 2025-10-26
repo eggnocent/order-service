@@ -9,7 +9,6 @@ pipeline {
     HOST = credentials('host')
     USERNAME = credentials('username')
     CONSUL_HTTP_URL = credentials('consul-http-url')
-    CONSUL_HTTP_KEY = "backend/order-service"
     CONSUL_HTTP_TOKEN = credentials('consul-http-token')
     CONSUL_WATCH_INTERVAL_SECONDS = 60
   }
@@ -40,11 +39,13 @@ pipeline {
       steps {
         script {
           echo "GIT_BRANCH: ${env.GIT_BRANCH}"
-          if (env.GIT_BRANCH == 'origin/main') {
-            env.TARGET_BRANCH = 'main'
+          if (env.GIT_BRANCH == 'origin/master') {
+            env.TARGET_BRANCH = 'master'
           } else if (env.GIT_BRANCH == 'origin/development') {
             env.TARGET_BRANCH = 'development'
           }
+
+          echo "TARGET_BRANCH: ${env.TARGET_BRANCH}"
         }
       }
     }
@@ -52,7 +53,7 @@ pipeline {
     stage('Checkout Code') {
       steps {
         script {
-          def repoUrl = 'https://github.com/Mini-Soccer-Project/order-service.git'
+          def repoUrl = 'https://github.com/eggnocent/order-service.git'
 
           checkout([$class: 'GitSCM',
             branches: [
@@ -63,7 +64,7 @@ pipeline {
             ]
           ])
 
-          sh "ls -lah"
+          sh 'ls -lah'
         }
       }
     }
@@ -105,7 +106,7 @@ pipeline {
           sh """
           git config --global user.name 'Jenkins CI'
           git config --global user.email 'jenkins@company.com'
-          git remote set-url origin https://${GITHUB_CREDENTIALS_USR}:${GITHUB_CREDENTIALS_PSW}@github.com/Mini-Soccer-Project/order-service.git
+          git remote set-url origin https://${GITHUB_CREDENTIALS_USR}:${GITHUB_CREDENTIALS_PSW}@github.com/eggnocent/order-service.git
           git add docker-compose.yaml
           git commit -m 'Update image version to ${TARGET_BRANCH}-${currentBuild.number} [skip ci]' || echo 'No changes to commit'
           git pull origin ${TARGET_BRANCH} --rebase
@@ -116,33 +117,60 @@ pipeline {
     }
 
     stage('Deploy to Remote Server') {
-      steps {
+    steps {
         script {
-          def targetDir = "/home/faisalilhami/mini-soccer-project/order-service"
-          def sshCommandToServer = """
-          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ${USERNAME}@${HOST} '
-            if [ -d "${targetDir}/.git" ]; then
-                echo "Directory exists. Pulling latest changes."
-                cd "${targetDir}"
-                git pull origin "${TARGET_BRANCH}"
-            else
-                echo "Directory does not exist. Cloning repository."
-                git clone -b "${TARGET_BRANCH}" git@github.com:Mini-Soccer-Project/order-service.git "${targetDir}"
-                cd "${targetDir}"
-            fi
-
-            cp .env.example .env
-            sed -i "s/^TIMEZONE=.*/TIMEZONE=Asia\\/Jakarta/" "${targetDir}/.env"
-            sed -i "s/^CONSUL_HTTP_URL=.*/CONSUL_HTTP_URL=${CONSUL_HTTP_URL}/" "${targetDir}/.env"
-            sed -i "s/^CONSUL_HTTP_PATH=.*/CONSUL_HTTP_PATH=backend\\/order-service/" "${targetDir}/.env"
-            sed -i "s/^CONSUL_HTTP_TOKEN=.*/CONSUL_HTTP_TOKEN=${CONSUL_HTTP_TOKEN}/" "${targetDir}/.env"
-            sed -i "s/^CONSUL_WATCH_INTERVAL_SECONDS=.*/CONSUL_WATCH_INTERVAL_SECONDS=${CONSUL_WATCH_INTERVAL_SECONDS}/" "${targetDir}/.env"
-            sudo docker compose up -d --build --force-recreate
-          '
-          """
-          sh sshCommandToServer
+            withCredentials([
+                string(credentialsId: 'consul-http-token', variable: 'CONSUL_HTTP_TOKEN'),
+                string(credentialsId: 'consul-http-url', variable: 'CONSUL_HTTP_URL'),
+                sshUserPrivateKey(credentialsId: 'ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER'),
+                string(credentialsId: 'host', variable: 'HOST')
+            ]) {
+                def targetBranch = env.TARGET_BRANCH ?: 'master'
+                def consulWatchInterval = env.CONSUL_WATCH_INTERVAL_SECONDS ?: '60'
+                
+                sh '''
+                    set -e
+                    
+                    echo "=== Testing SSH Connection ==="
+                    ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" ${SSH_USER}@${HOST} "echo 'SSH Connection: OK'"
+                    
+                    echo "=== Deploying to Remote Server ==="
+                    ssh -o StrictHostKeyChecking=no -i "$SSH_KEY_FILE" ${SSH_USER}@${HOST} bash <<'ENDSSH'
+                        set -e
+                        
+                        TARGET_DIR="/home/eggnocent/mini-soccer-project/order-service"
+                        
+                        if [ -d "$TARGET_DIR/.git" ]; then
+                            echo "Directory exists. Pulling latest changes..."
+                            cd "$TARGET_DIR"
+                            git pull origin "''' + targetBranch + '''"
+                        else
+                            echo "Directory does not exist. Cloning repository..."
+                            mkdir -p "$(dirname "$TARGET_DIR")"
+                            git clone -b "''' + targetBranch + '''" https://github.com/eggnocent/order-service.git "$TARGET_DIR"
+                            cd "$TARGET_DIR"
+                        fi
+                        
+                        echo "Setting up .env file..."
+                        [ -f .env.example ] && cp .env.example .env || touch .env
+                        
+                        sed -i "s|^TIMEZONE=.*|TIMEZONE=Asia/Jakarta|" .env
+                        sed -i "s|^CONSUL_HTTP_URL=.*|CONSUL_HTTP_URL=${CONSUL_HTTP_URL}|" .env
+                        sed -i "s|^CONSUL_HTTP_PATH=.*|CONSUL_HTTP_PATH=backend\\/order-service|" .env
+                        sed -i "s|^CONSUL_HTTP_TOKEN=.*|CONSUL_HTTP_TOKEN=${CONSUL_HTTP_TOKEN}|" .env
+                        sed -i "s|^CONSUL_WATCH_INTERVAL_SECONDS=.*|CONSUL_WATCH_INTERVAL_SECONDS=''' + consulWatchInterval + '''|" .env
+                        
+                        echo "Starting Docker Compose..."
+                        sudo docker compose up -d --build --force-recreate
+                        
+                        echo "✅ Deployment completed successfully!"
+ENDSSH
+                    
+                    echo "✅ Remote deployment finished."
+                '''
+            }
         }
-      }
     }
+}
   }
 }
